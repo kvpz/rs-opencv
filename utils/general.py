@@ -1111,6 +1111,7 @@ def increment_path(path, exist_ok=False, sep='', mkdir=False):
 
 
 # OpenCV Multilanguage-friendly functions ------------------------------------------------------------------------------------
+# commented ale
 imshow_ = cv2.imshow  # copy to avoid recursion errors
 
 

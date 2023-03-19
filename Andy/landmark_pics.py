@@ -4,6 +4,7 @@ import pyrealsense2 as rs
 import numpy as np
 import cv2
 import os,time
+import serial
 
 my_path = "New_Images/"
 onlyfiles = [f for f in listdir(my_path) if isfile(join(my_path, f))]
@@ -111,17 +112,11 @@ def recognize_square(color):
     #             return value
 
 if __name__=="__main__":
-    for i in range(30):
+    for i in range(10):
         name,color=take_picture()
-        time.sleep(1)
-    # print("Picture taken")
-    # borders=recognize_square(color)
-    # print("Recognized color")
-    # if borders:
-
-    #     draw_border(name,borders[0],borders[1],borders[2],borders[3])
-    #     print("Border drawn")
-    # save_to_remote_pc()
-    # print("Saved to remote PC")
+        comm = serial.Serial("/dev/ttyACM0",115200)
+        comm.write(b'F')
+        time.sleep(0.5)
+        comm.write(b'S')
 
 
