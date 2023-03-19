@@ -38,6 +38,14 @@ import numpy
 
 import torch
 
+# import socket # kevin
+
+# RECEIVER_IP = '192.168.0.104'
+# RECEIVER_PORT = 9999
+
+# client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+# client_socket.connect((RECEIVER_IP, RECEIVER_PORT))
+
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
@@ -57,7 +65,8 @@ mq_max_size = 10000
 mq_msg_size = 102400
 
 # Open the message queue
-mq = posix_ipc.MessageQueue(mq_name, posix_ipc.O_CREAT | posix_ipc.O_RDWR, mode=0o666)
+# mq = posix_ipc.MessageQueue(mq_name, posix_ipc.O_CREAT | posix_ipc.O_RDWR, mode=0o666)
+mq = posix_ipc.MessageQueue(mq_name, flags=os.O_CREAT | os.O_NONBLOCK)
 
 
 def get_distance(depth_frame, xyxy):
@@ -153,7 +162,6 @@ def run(
     bs = len(dataset)
     
     vid_path, vid_writer = [None] * bs, [None] * bs
-
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
@@ -200,7 +208,8 @@ def run(
                 for *xyxy, conf, cls in reversed(det):
                     distance = get_distance(depth[i],xyxy)
                     c = int(cls)  # integer class
-                    q += f'{names[c]},{xyxy},{distance:.2f}#'
+                    x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
+                    q += f'{names[c]},{x1},{y1},{x2},{y2},{distance:.2f}#'
                     if view_img:  # Add bbox to imageq
                        
                         if source == 'rs':
@@ -211,6 +220,12 @@ def run(
                         
             # Stream results
             im0 = annotator.result()
+            # if remote_stream:
+            #     print('sending stream results')
+            #     cv2imgbytes = cv2.imencode('.jpg', im0)[1].tobytes()
+            #     cv2imglength = len(cv2imgbytes).to_bytes(4, byteorder='little')
+            #     client_socket.sendall(cv2imglength + cv2imgbytes)
+            # view_img = False
             if view_img:
                 if platform.system() == 'Linux' and p not in windows:
                     windows.append(p)
@@ -219,7 +234,8 @@ def run(
                 # commented ale
                 cv2.imshow(str(p), im0)
                 cv2.waitKey(100)  # 1 millisecond
-                print("sending message to MQ")
+            print(q)    
+            if q: # send message to MQ if message string is not empty
                 mq.send(q, priority=0)
 
         # Print time (inference-only)
