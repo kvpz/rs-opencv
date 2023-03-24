@@ -35,8 +35,9 @@ import sys
 import serial
 from pathlib import Path
 import numpy
-
+import json
 import torch
+import signal
 
 # import socket # kevin
 
@@ -61,8 +62,11 @@ from utils.torch_utils import select_device, smart_inference_mode
 import posix_ipc
 
 mq_name = "/object_detection_queue"
-mq_max_size = 10000
-mq_msg_size = 102400
+
+
+
+
+signal_handler_done=False
 
 # Open the message queue
 # mq = posix_ipc.MessageQueue(mq_name, posix_ipc.O_CREAT | posix_ipc.O_RDWR, mode=0o666)
@@ -83,10 +87,10 @@ def get_distance(depth_frame, xyxy):
     start_x=int(x1)
     
     distances=[]
-    for i in range(7):
+    for i in range(5):
         start_x+=x
         start_y=int(y1)
-        for j in range(7):
+        for j in range(5):
             start_y+=y
             distances.append(depth_frame.get_distance(int(start_x), int(start_y)))
             
@@ -101,7 +105,7 @@ def get_distance(depth_frame, xyxy):
     # print(filtered_arr)
     average=sum(filtered_arr)/len(filtered_arr)
     
-    dist = average*1000
+    dist = average*1000*0.866
     
     return dist
 
@@ -135,6 +139,7 @@ def run(
         dnn=False,  # use OpenCV DNN for ONNX inference
         vid_stride=1,  # video frame-rate stride
 ):
+    global signal_handler_done
     source = str(source)
     save_img = not nosave and not source.endswith('.txt')  # save inference images
     is_file = Path(source).suffix[1:] in (IMG_FORMATS + VID_FORMATS)
@@ -157,9 +162,23 @@ def run(
     # Dataloader
     bs = 1  # batch_size
     # commented ale
-    view_img = check_imshow(warn=True)
+    if view_img:
+        view_img = check_imshow(warn=True)
     dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride)
+
+    if not signal_handler_done:
+        signal_handler_done=True
+        def signal_handler(sig, frame):
+
+            # Catch Ctrl+C and stop the pipeline
+            dataset.capture[0].stop()
+            print('Pipeline stopped')
+            exit(0)
+
+        signal.signal(signal.SIGINT, signal_handler)
     bs = len(dataset)
+
+    cam_info = {}
     
     vid_path, vid_writer = [None] * bs, [None] * bs
     # Run inference
@@ -209,9 +228,19 @@ def run(
                     distance = get_distance(depth[i],xyxy)
                     c = int(cls)  # integer class
                     x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
-                    q += f'{names[c]},{x1},{y1},{x2},{y2},{distance:.2f}#'
+                    cam_info = {
+                        "object": names[c],
+                        "x1": x1,
+                        "y1": y1,
+                        "x2": x2,
+                        "y2": y2,
+                        "distance": round(distance, 2)
+                    }
+
+                    json_data = json.dumps(cam_info)
+
+                    q += f'{names[c]}, {x1},{y1},{x2},{y2},{distance:.2f}#'
                     if view_img:  # Add bbox to imageq
-                       
                         if source == 'rs':
                             label = (f'{names[c]} {conf:.2f}: {distance:.2f} mm')
                         else:
@@ -234,12 +263,13 @@ def run(
                 # commented ale
                 cv2.imshow(str(p), im0)
                 cv2.waitKey(100)  # 1 millisecond
-            print(q)    
-            if q: # send message to MQ if message string is not empty
-                mq.send(q, priority=0)
+            print(cam_info)    
+            num_messages = mq.current_messages
+            if q and num_messages<10: # send message to MQ if message string is not empty
+                mq.send(json_data)
 
         # Print time (inference-only)
-        LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1E3:.1f}ms")
+        # LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1E3:.1f}ms")
 
     # Print results
     t = tuple(x.t / seen * 1E3 for x in dt)  # speeds per image
