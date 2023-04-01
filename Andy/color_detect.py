@@ -4,10 +4,12 @@ import pyrealsense2 as rs
 import numpy as np
 import cv2
 import os,time
+import posix_ipc
 
-#mq_name = "/attraction_color_queue"
-#mq_max_size = 10000
-#mq_msg_size = 102400
+mq_name = "/attraction_color_mq"
+mq_max_size = 10000
+mq_msg_size = 102400
+mq = posix_ipc.MessageQueue(mq_name, flags=os.O_CREAT | os.O_NONBLOCK)
 
 
 my_path = "New_Images/"
@@ -26,42 +28,19 @@ def get_img_num():
     return max(arr)
 
 def take_picture():
-    # Create a pipeline
-
-    pipeline = rs.pipeline()
-
-    # Create a config and configure the pipeline to stream
-    #  color and depth streams
-    config = rs.config()
-    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-
-    # Start streaming
-    pipeline.start(config)
+    global pipeline
 
     # Get frameset of color and depth
-    for i in range(75):
-        frames = pipeline.wait_for_frames()
+    #for i in range(75):
+    frames = pipeline.wait_for_frames()
     depth_frame = frames.get_depth_frame()
     color_frame = frames.get_color_frame()
 
     # Convert images to numpy arrays
     depth_image = np.asanyarray(depth_frame.get_data())
-    color_image = np.asanyarray(color_frame.get_data())
+    color_image = np.asanyarray(color_frame.get_data())    
 
-    # Save the image to disk
-    num=get_img_num()
-    if not num:
-        num=0
-    img_name = "{}image{}.png".format(my_path,num+1)
-    cv2.imwrite(img_name, color_image)
-
-    # Stop streaming
-    pipeline.stop()
-    
-
-    print("Image saved as {}".format(img_name))
-    return img_name,color_image
+    return color_image
 
 def draw_border(image,x1,y1,x2,y2):
     image_opened=cv2.imread(image)
@@ -111,29 +90,37 @@ def recognize_square(color):
             if r < 100 and g >= 100 and b < 100:
                 total_green_det += 1
 
-
-
     print("(RED) {}/{} = {}%".format(total_red_det,total_pixels,round(total_red_det/total_pixels*100,2)))
     print("(GREEN) {}/{} = {}%".format(total_green_det,total_pixels,round(total_green_det/total_pixels*100,2)))
 
-    # for key,value in all_found.items():
-    #     if key:
-    #         if key==max(list(all_found.keys())):
-    #             return value
+    try:
+        if round(total_red_det/total_pixels*100,2) > (round(total_green_det/total_pixels*100,2) + 10):
+            mq.send("R")
+        elif round(total_green_det/total_pixels*100,2) > (round(total_red_det/total_pixels*100,2) + 10):
+            mq.send("G")
+
+    except Exception as e:
+        print(f"Error sending message: {e}")
 
 if __name__=="__main__":
+    # Create a pipeline
+    global pipeline
+    pipeline = rs.pipeline()
+
+    # Create a config and configure the pipeline to stream
+    # color and depth streams
+    config = rs.config()
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+
+    # Start streaming
+    pipeline.start(config)
+
     for i in range(30):
-        name,color=take_picture()
+        color=take_picture()
         recognize_square(color)
-        time.sleep(1)
-    # print("Picture taken")
-    # borders=recognize_square(color)
-    # print("Recognized color")
-    # if borders:
+        #time.sleep(1)
 
-    #     draw_border(name,borders[0],borders[1],borders[2],borders[3])
-    #     print("Border drawn")
-    # save_to_remote_pc()
-    # print("Saved to remote PC")
-
+    # Stop streaming
+    pipeline.stop()
 

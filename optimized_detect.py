@@ -9,7 +9,7 @@ import numpy
 import json
 import torch
 import signal
-
+import time
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -24,35 +24,99 @@ from utils.general import (LOGGER, Profile, check_file, check_img_size, check_im
 from utils.plots import Annotator, colors, save_one_box
 from utils.torch_utils import select_device, smart_inference_mode
 import posix_ipc
+import numpy as np
 
 mq_name = "/object_detection_queue"
-
-
-
 
 signal_handler_done=False
 
 mq = posix_ipc.MessageQueue(mq_name, flags=os.O_CREAT | os.O_NONBLOCK)
 
+once=0
 
-def get_obj_distance(depth_frame, xyxy, innermost_pixels):
+def get_obj_distance(depth_frame, xyxy, innermost_pixels,obj_name,img):
+    
+    global once
+    once+=1
     x1, y1, x2, y2 = xyxy
-    w = abs(x2 - x1)
-    h = abs(y2 - y1)
+    # w = (x1+x2)//2
+    # h = (y1+y2)//2
 
-    # Define the top-left corner of the innermost rectangle
-    x_start = ((x1 + w) // 2) - (innermost_pixels // 2)
-    y_start = ((y1 + h) // 2) - (innermost_pixels // 2)
+    # # # Define the top-left corner of the innermost rectangle
+    # x_start = ((x1 + w) // 2) - (innermost_pixels // 2)
+    # y_start = ((y1 + h) // 2) - (innermost_pixels // 2)
+
+
+    # Convert the image to the HSV color space
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+    # Define a range of yellow color values in the HSV color space
+    lower_yellow = np.array([20, 100, 100])
+    upper_yellow = np.array([30, 255, 255])
+
+    mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+
+    # Create a mask based on the defined color range
+    filtered = cv2.bitwise_and(img, img, mask=mask)
+
+    # Convert the filtered image to grayscale
+    gray = cv2.cvtColor(filtered, cv2.COLOR_BGR2GRAY)
+
+    # Find the indices of the non-zero elements in the grayscale image
+    y_indices, x_indices = np.where(gray > 0)
+
+    # Convert the (x, y) coordinates to pixel coordinates in the depth frame
+    # depth_scale = depth_frame.get_depth_scale()
+    coordinates = np.column_stack((x_indices, y_indices))
 
     # Get the distances for all pixels in the innermost rectangle
-    distances = [depth_frame.get_distance(x_start + i, y_start + j) for i in range(innermost_pixels) \
-                 for j in range(innermost_pixels)]
+    distances = [depth_frame.get_distance(x, y) for (x, y) in coordinates]
+    # for (x,y) in coordinates:
+    #     print(x,y)
+
+    # print(distances[0:5])
 
     # Filter out any NaN values
-    distances = [d for d in distances if d]
+    distances = [d for d in distances if not np.isnan(d)]
+    # print(len(distances))
+
+    if not distances:
+        return 0
+
+    mean = sum(distances) / len(distances)
+    variance = sum((d - mean) ** 2 for d in distances) / (len(distances) - 1)
+    std_dev = variance ** 0.5
+
+    num=1.5
+
+    # avg_distance = [d for d in distances if mean - num * std_dev <= d <= mean + num * std_dev]
+    avg_distance = distances
+
+    # print(len(avg_distance))
+
+    # print("here")
 
     # Calculate the average distance
-    avg_distance = sum(distances) / len(distances)
+    avg_distance = sum(avg_distance) / len(avg_distance)
+
+    # try:
+    # if obj_name == "duck":
+    #     num = 0.2
+    # else:
+    #     num = 0.079
+    # avg_distance = depth_frame.get_distance(x1 + (x2-x1) // 2, y1 + (y2 - y1) // 2)
+    # avg_distance = avg_distance**2-num**2
+    # if avg_distance<0:
+    #     return 0
+
+    # avg_distance = avg_distance**0.5
+
+    # print(color_frame[x1 + (x2-x1) // 2][y1 + (y2 - y1) // 2])
+    # if avg_distance != 0:
+    #     avg_distance = avg_distance**2-0.11**2
+    #     avg_distance = avg_distance**0.5
+    # except:
+    #     avg_distance = 0
 
     return avg_distance
 
@@ -118,8 +182,12 @@ def run(
     
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
+
     _, _, dt = 0, [], (Profile(), Profile(), Profile())
     for _, im, im0s, depth, _, _ in dataset:
+        # print(str(type(im0s[0])) + ' : ' + str(type(depth[0])))
+        # print(str(len(im0s[0])) + ' : ' + str(len(depth[0])))
+        # input()
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
             im = im.half() if model.fp16 else im.float()  # uint8 to fp16/32
@@ -137,8 +205,12 @@ def run(
 
         # Process predictions
         json_data = {}
+        detected_objects = []
         for i, det in enumerate(pred):  # per image
             im0 = im0s[i].copy()
+
+            
+
             if len(det):
                 # Rescale boxes from img_size to im0 size
                 det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
@@ -151,19 +223,30 @@ def run(
                 "x2": int(xyxy[2]),
                 "y2": int(xyxy[3]),
                 "inference_time": "{}ms".format(round(float(dt[1].dt) * float(10**3),3)),
-                "distance": 5,
-                } for *xyxy, _, cls in reversed(det)]
+                "distance": round(get_obj_distance(depth[i], xyxy,25,names[int(cls)],im0s[0].copy()) * 100 , 2),
+                } if xyxy[1] > 24 else None for *xyxy, _, cls in reversed(det)]
 
                 #this for the distance: round(get_obj_distance(depth[i], xyxy,25), 2)
-
+                
                 json_data = json.dumps(detected_objects)
                         
             print(json_data)
-            print(len(detected_objects))
-            print("\n\n")
-            num_messages = mq.current_messages
-            if json_data and num_messages<10: # send message to MQ if message string is not empty
-                mq.send(json_data)
+            time.sleep(3)
+            # if detected_objects:
+            #     print(len(detected_objects))
+            # else:
+            #     print(0)
+            # print("\n\n")
+            # num_messages = mq.current_messages
+            if json_data: #and num_messages<10: # send message to MQ if message string is not empty
+                try:
+                    mq.send(json_data)
+                except posix_ipc.BusyError:
+                    # The queue is full, retrieve the first message
+                    m = mq.receive()
+                    # Add the new message
+                    # mq.send(json_data)
+                    # print (m)
 
 def parse_opt():
     parser = argparse.ArgumentParser()

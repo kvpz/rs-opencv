@@ -38,11 +38,12 @@ import numpy
 import json
 import torch
 import signal
+import pyrealsense2 as rs
 
-# import socket # kevin
+import socket # kevin
 
-# RECEIVER_IP = '192.168.0.104'
-# RECEIVER_PORT = 9999
+RECEIVER_IP = '192.168.251.158'
+RECEIVER_PORT = 9999
 
 # client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 # client_socket.connect((RECEIVER_IP, RECEIVER_PORT))
@@ -81,32 +82,34 @@ def get_distance(depth_frame, xyxy):
         y: pixel in y-axis
     '''
 
-    x1, y1, x2, y2 = xyxy
-    x = int(abs(x2-x1)/10)
-    y = int(abs(y2-y1)/10)
-    start_x=int(x1)
+    # x1, y1, x2, y2 = xyxy
+    # x = int(abs(x2-x1)/10)
+    # y = int(abs(y2-y1)/10)
+    # start_x=int(x1)
     
-    distances=[]
-    for i in range(5):
-        start_x+=x
-        start_y=int(y1)
-        for j in range(5):
-            start_y+=y
-            distances.append(depth_frame.get_distance(int(start_x), int(start_y)))
+    # distances=[]
+    # for i in range(int(abs(x2.item()-x1.item()))): #range(5):
+    #     start_x+=x
+    #     start_y=int(y1)
+    #     for j in range(int(abs(y2.item()-y1.item()))): #range(5):
+    #         start_y+=y
+    #         pixel_data = depth_frame.get_pixel(start_x, start_y)
+    #         if pixel_data[0] >127 and pixel_data[1] > 127 and pixel_data[2] < 10:
+    #             distances.append(depth_frame.get_distance(int(start_x), int(start_y)))
             
 
-    std_dev=numpy.std(distances)
-    mean=numpy.mean(distances)
-    lower_bound = mean - 3 * std_dev
-    upper_bound = mean + 3 * std_dev
+    # std_dev=numpy.std(distances)
+    # mean=numpy.mean(distances)
+    # lower_bound = mean - 3 * std_dev
+    # upper_bound = mean + 3 * std_dev
 
-    # Filter out the values that are within the bounds
-    filtered_arr = [x for x in distances if (x >= lower_bound and x <= upper_bound)]
-    # print(filtered_arr)
-    average=sum(filtered_arr)/len(filtered_arr)
+    # # Filter out the values that are within the bounds
+    # filtered_arr = [x for x in distances if (x >= lower_bound and x <= upper_bound)]
+    # # print(filtered_arr)
+    # average=sum(filtered_arr)/len(filtered_arr)
     
-    dist = average*1000*0.866
-    
+    dist = 0
+
     return dist
 
 @smart_inference_mode()
@@ -185,6 +188,8 @@ def run(
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
     for path, im, im0s, depth, vid_cap, s in dataset:
+        print(str(len(im0s)) + ' : ' + str(len(depth)))
+        input()
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
             im = im.half() if model.fp16 else im.float()  # uint8 to fp16/32
@@ -249,11 +254,12 @@ def run(
                         
             # Stream results
             im0 = annotator.result()
-            # if remote_stream:
-            #     print('sending stream results')
-            #     cv2imgbytes = cv2.imencode('.jpg', im0)[1].tobytes()
-            #     cv2imglength = len(cv2imgbytes).to_bytes(4, byteorder='little')
-            #     client_socket.sendall(cv2imglength + cv2imgbytes)
+            remote_stream = True
+            if remote_stream:
+                print('sending stream results')
+                cv2imgbytes = cv2.imencode('.jpg', im0)[1].tobytes()
+                cv2imglength = len(cv2imgbytes).to_bytes(4, byteorder='little')
+                # client_socket.sendall(cv2imglength + cv2imgbytes)
             # view_img = False
             if view_img:
                 if platform.system() == 'Linux' and p not in windows:

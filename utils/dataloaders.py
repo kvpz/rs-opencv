@@ -221,12 +221,13 @@ class LoadStreams:
         if not self.rect:
             LOGGER.warning('WARNING ⚠️ Stream shapes differ. For optimal performance supply similarly-shaped streams.')
 
+    
     def get_frame(self, i, xsize, ysize, fps):
 
         if self.sources[0] == 'rs':
 
 
-            jsonObj = json.load(open("/home/ieeefiu/distancedata.json"))
+            jsonObj = json.load(open("rs_config.json"))
             json_string= str(jsonObj).replace("'", '\"')
 
             # Configure depth and color streams
@@ -267,9 +268,13 @@ class LoadStreams:
             #     print("\nMake sure the camera is connected!")
             #     sys.exit(1)
 
-            frames = self.pipeline.wait_for_frames()    
-            color_frame = frames.get_color_frame()
-            depth_frame = frames.get_depth_frame()
+            align_to = rs.stream.depth
+            self.align = rs.align(align_to)
+
+            frames = self.pipeline.wait_for_frames()  
+            aligned_frames =  self.align.process(frames)
+            color_frame = aligned_frames.get_color_frame()
+            depth_frame = aligned_frames.get_depth_frame()
 
             color_image = np.asanyarray(color_frame.get_data())               
 
@@ -302,9 +307,10 @@ class LoadStreams:
             while n < f:
                 n += 1
                 if n % self.vid_stride == 0:
-                    frames = the_pipeline.wait_for_frames()    
-                    depth_frame = frames.get_depth_frame()
-                    color_frame = frames.get_color_frame()
+                    frames = the_pipeline.wait_for_frames()  
+                    aligned_frames =  self.align.process(frames)  
+                    depth_frame = aligned_frames.get_depth_frame()
+                    color_frame = aligned_frames.get_color_frame()
 
                     if depth_frame and color_frame:
                         color_image = np.asanyarray(color_frame.get_data())
