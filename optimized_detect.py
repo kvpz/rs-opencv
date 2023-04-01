@@ -34,89 +34,76 @@ mq = posix_ipc.MessageQueue(mq_name, flags=os.O_CREAT | os.O_NONBLOCK)
 
 once=0
 
-def get_obj_distance(depth_frame, xyxy, innermost_pixels,obj_name,img):
-    
-    global once
-    once+=1
-    x1, y1, x2, y2 = xyxy
-    # w = (x1+x2)//2
-    # h = (y1+y2)//2
+def get_obj_distance(depth_frame, xyxy, obj_name,img):
 
-    # # # Define the top-left corner of the innermost rectangle
-    # x_start = ((x1 + w) // 2) - (innermost_pixels // 2)
-    # y_start = ((y1 + h) // 2) - (innermost_pixels // 2)
+    x1, y1, x2, y2 = [int(x) for x in xyxy]
+
+    if obj_name == 'duck':
+        h, w = img.shape[:2]
+
+        print(str(w) + ' ' + str(h))
+
+        # Convert the image to the HSV color space
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+        # Define a range of yellow color values in the HSV color space
+        lower_yellow = np.array([20, 100, 100])
+        upper_yellow = np.array([30, 255, 255])
+
+        mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+
+        # Create a mask based on the defined color range
+        yellow_filtered = cv2.bitwise_and(img, img, mask=mask_yellow)
+
+        mask_range = np.zeros((h,w), np.uint8)
+        mask_range[y1:y2:, x1:x2] = 1
 
 
-    # Convert the image to the HSV color space
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        filtered = cv2.bitwise_and(yellow_filtered, yellow_filtered, mask=mask_range)
 
-    # Define a range of yellow color values in the HSV color space
-    lower_yellow = np.array([20, 100, 100])
-    upper_yellow = np.array([30, 255, 255])
+        # Convert the filtered image to grayscale
+        gray = cv2.cvtColor(filtered, cv2.COLOR_BGR2GRAY)
 
-    mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        cv2.imshow('Image', img)
 
-    # Create a mask based on the defined color range
-    filtered = cv2.bitwise_and(img, img, mask=mask)
+        # Wait for a key press and then close the window
+        cv2.waitKey(1)
 
-    # Convert the filtered image to grayscale
-    gray = cv2.cvtColor(filtered, cv2.COLOR_BGR2GRAY)
+        # Find the indices of the non-zero elements in the grayscale image
+        y_indices, x_indices = np.where(gray > 0) 
+        
+        coordinates = np.column_stack((x_indices, y_indices))
 
-    # Find the indices of the non-zero elements in the grayscale image
-    y_indices, x_indices = np.where(gray > 0)
+        # Get the distances for all pixels in the innermost rectangle
+        # * 100 to go from mm to cm
+        distances = [depth_frame.get_distance(x, y)*100 for (x, y) in coordinates]
 
-    # Convert the (x, y) coordinates to pixel coordinates in the depth frame
-    # depth_scale = depth_frame.get_depth_scale()
-    coordinates = np.column_stack((x_indices, y_indices))
+        # Filter out any NaN values
+        distances = [d for d in distances if not np.isnan(d) and d > 0]
+        min_distance = min(distances)
+        print('min distance: ' + str(min_distance))
 
-    # Get the distances for all pixels in the innermost rectangle
-    distances = [depth_frame.get_distance(x, y) for (x, y) in coordinates]
-    # for (x,y) in coordinates:
-    #     print(x,y)
+        distances = [d for d in distances if d < min_distance + 8]
 
-    # print(distances[0:5])
+        if not distances:
+            return 0
 
-    # Filter out any NaN values
-    distances = [d for d in distances if not np.isnan(d)]
-    # print(len(distances))
+        mean = sum(distances) / len(distances)
+        variance = sum((d - mean) ** 2 for d in distances) / (len(distances) - 1)
+        std_dev = variance ** 0.5
 
-    if not distances:
-        return 0
+        num=1.5
 
-    mean = sum(distances) / len(distances)
-    variance = sum((d - mean) ** 2 for d in distances) / (len(distances) - 1)
-    std_dev = variance ** 0.5
+        # avg_distance = [d for d in distances if mean - num * std_dev <= d <= mean + num * std_dev]
+        avg_distance = distances
 
-    num=1.5
+        # Calculate the average distance
+        avg_distance = sum(avg_distance) / len(avg_distance)
 
-    # avg_distance = [d for d in distances if mean - num * std_dev <= d <= mean + num * std_dev]
-    avg_distance = distances
-
-    # print(len(avg_distance))
-
-    # print("here")
-
-    # Calculate the average distance
-    avg_distance = sum(avg_distance) / len(avg_distance)
-
-    # try:
-    # if obj_name == "duck":
-    #     num = 0.2
-    # else:
-    #     num = 0.079
-    # avg_distance = depth_frame.get_distance(x1 + (x2-x1) // 2, y1 + (y2 - y1) // 2)
-    # avg_distance = avg_distance**2-num**2
-    # if avg_distance<0:
-    #     return 0
-
-    # avg_distance = avg_distance**0.5
-
-    # print(color_frame[x1 + (x2-x1) // 2][y1 + (y2 - y1) // 2])
-    # if avg_distance != 0:
-    #     avg_distance = avg_distance**2-0.11**2
-    #     avg_distance = avg_distance**0.5
-    # except:
-    #     avg_distance = 0
+    else:
+        x = x1 + (x2-x1)//2
+        y = y1 + (y2-y1)//2
+        avg_distance = depth_frame.get_distance(x, y)
 
     return avg_distance
 
@@ -223,8 +210,8 @@ def run(
                 "x2": int(xyxy[2]),
                 "y2": int(xyxy[3]),
                 "inference_time": "{}ms".format(round(float(dt[1].dt) * float(10**3),3)),
-                "distance": round(get_obj_distance(depth[i], xyxy,25,names[int(cls)],im0s[0].copy()) * 100 , 2),
-                } if xyxy[1] > 24 else None for *xyxy, _, cls in reversed(det)]
+                "distance": round(get_obj_distance(depth[i], xyxy,names[int(cls)],im0s[0].copy()), 2),
+                } for *xyxy, _, cls in reversed(det) if xyxy[1] > 24]
 
                 #this for the distance: round(get_obj_distance(depth[i], xyxy,25), 2)
                 
