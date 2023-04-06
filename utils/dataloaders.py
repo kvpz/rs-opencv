@@ -11,6 +11,7 @@ import math
 import os
 import random
 import shutil
+import sys
 import time
 from itertools import repeat
 from multiprocessing.pool import Pool, ThreadPool
@@ -204,9 +205,9 @@ class LoadStreams:
             st = f'{i + 1}/{n}: {s}... '
             s = eval(s) if s.isnumeric() else s  # i.e. s = '0' local webcam
             
-            capture = self.get_frame(i, xsize, ysize, fps)
+            self.capture = self.get_frame(i, xsize, ysize, fps)
 
-            self.threads[i] = Thread(target=self.update, args=([i, s, capture[0], capture[1]]), daemon=True)
+            self.threads[i] = Thread(target=self.update, args=([i, s, self.capture[0], self.capture[1]]), daemon=True)
 
             LOGGER.info(f"{st} Success ({self.frames[i]} frames {self.size[0]}x{self.size[1]} at {self.fps[i]:.2f} FPS)")
             self.threads[i].start()
@@ -220,33 +221,70 @@ class LoadStreams:
         if not self.rect:
             LOGGER.warning('WARNING ⚠️ Stream shapes differ. For optimal performance supply similarly-shaped streams.')
 
+    
     def get_frame(self, i, xsize, ysize, fps):
 
         if self.sources[0] == 'rs':
-            pipeline = rs.pipeline()
+
+
+            jsonObj = json.load(open("/home/ieeefiu/Desktop/rs-opencv/rs_config.json"))
+            json_string= str(jsonObj).replace("'", '\"')
+
+            # Configure depth and color streams
+
+            try:
+                self.pipeline = rs.pipeline()
+            except RuntimeError:
+                print("\nMake sure the camera is connected!")
+                sys.exit(1)
             config = rs.config()
 
-            config.enable_stream(rs.stream.depth, xsize, ysize, rs.format.z16, fps)
-            config.enable_stream(rs.stream.color, xsize, ysize, rs.format.bgr8, fps)
-            pipeline.start(config)
+            fps=int(jsonObj["viewer"]['stream-fps'])
+            width,height = int(jsonObj["viewer"]['stream-width']), int(jsonObj["viewer"]['stream-height'])
+            config.enable_stream(rs.stream.depth, width, height, rs.format.z16, fps)
+            config.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)
+            cfg = self.pipeline.start(config)
 
-            self.pipeline = pipeline
+            # depth_sensor = self.pipeline.get_active_profile().get_device().first_depth_sensor()
+            # depth_range = rs.pyrealsense2.option_range(0.15,2.0)
+            # depth_sensor.set_options(rs.option.depth_range,depth_range)
 
-            frames = pipeline.wait_for_frames()    
-            color_frame = frames.get_color_frame()
-            depth_frame = frames.get_depth_frame()
+            dev = cfg.get_device()
+            advnc_mode = rs.rs400_advanced_mode(dev)
+            advnc_mode.load_json(json_string) #doesn't matter if we don't use it let's leave it just in case
 
-            color_image = np.asanyarray(color_frame.get_data())               
+
+
+            # self.pipeline = rs.pipeline()
+            # config = rs.config()
+
+            # config.enable_stream(rs.stream.depth, xsize, ysize, rs.format.z16, fps)
+            # config.enable_stream(rs.stream.color, xsize, ysize, rs.format.bgr8, fps)
+            # try:
+            #     self.pipeline.start(config)
+            # except RuntimeError:
+            #     print("\nMake sure the camera is connected!")
+            #     sys.exit(1)
+
+            align_to = rs.stream.depth
+            self.align = rs.align(align_to)
+
+            frames = self.pipeline.wait_for_frames()  
+            aligned_frames =  self.align.process(frames)
+            color_frame = aligned_frames.get_color_frame()
+            depth_frame = aligned_frames.get_depth_frame()
+
+            self.my_color_image = np.asanyarray(color_frame.get_data())               
 
             self.size = [int(color_frame.get_width()), int(color_frame.get_height())]
 
             self.frames[i] = float('inf')  # infinite stream fallback
             self.fps[i] = max((fps if math.isfinite(fps) else 0) % 100, 0) or 30  # 30 FPS fallback
 
-            self.imgs[i] = color_image
+            self.imgs[i] = self.my_color_image
             self.depth[i] = depth_frame
 
-            return pipeline, None
+            return self.pipeline, None
         else:
             s = int(self.sources[0])
             cap = cv2.VideoCapture(s)
@@ -260,16 +298,17 @@ class LoadStreams:
             
             return None, cap
 
-    def update(self, i, stream, pipeline=None, cap=None):
+    def update(self, i, stream, the_pipeline=None, cap=None):
         # Read stream `i` frames in daemon thread
         n, f = 0, self.frames[i]  # frame number, frame array
         if self.sources[0] == 'rs':
             while n < f:
                 n += 1
                 if n % self.vid_stride == 0:
-                    frames = pipeline.wait_for_frames()    
-                    depth_frame = frames.get_depth_frame()
-                    color_frame = frames.get_color_frame()
+                    frames = the_pipeline.wait_for_frames()  
+                    aligned_frames =  self.align.process(frames)  
+                    depth_frame = aligned_frames.get_depth_frame()
+                    color_frame = aligned_frames.get_color_frame()
 
                     if depth_frame and color_frame:
                         color_image = np.asanyarray(color_frame.get_data())

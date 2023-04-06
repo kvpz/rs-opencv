@@ -34,8 +34,19 @@ import platform
 import sys
 import serial
 from pathlib import Path
-
+import numpy
+import json
 import torch
+import signal
+import pyrealsense2 as rs
+
+import socket # kevin
+
+RECEIVER_IP = '192.168.251.158'
+RECEIVER_PORT = 9999
+
+# client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+# client_socket.connect((RECEIVER_IP, RECEIVER_PORT))
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -49,6 +60,18 @@ from utils.general import (LOGGER, Profile, check_file, check_img_size, check_im
                            increment_path, non_max_suppression, print_args, scale_boxes, strip_optimizer, xyxy2xywh)
 from utils.plots import Annotator, colors, save_one_box
 from utils.torch_utils import select_device, smart_inference_mode
+import posix_ipc
+
+mq_name = "/object_detection_queue"
+
+
+
+
+signal_handler_done=False
+
+# Open the message queue
+# mq = posix_ipc.MessageQueue(mq_name, posix_ipc.O_CREAT | posix_ipc.O_RDWR, mode=0o666)
+mq = posix_ipc.MessageQueue(mq_name, flags=os.O_CREAT | os.O_NONBLOCK)
 
 
 def get_distance(depth_frame, xyxy):
@@ -58,12 +81,35 @@ def get_distance(depth_frame, xyxy):
         x: pixel in x-axis
         y: pixel in y-axis
     '''
-    x1, y1, x2, y2 = xyxy
-    x = (x2-x1)/2 + x1
-    y = (y2-y1)/2 + y1
-    dist = depth_frame.get_distance(int(x), int(y))
-    dist = dist*1000
+
+    # x1, y1, x2, y2 = xyxy
+    # x = int(abs(x2-x1)/10)
+    # y = int(abs(y2-y1)/10)
+    # start_x=int(x1)
     
+    # distances=[]
+    # for i in range(int(abs(x2.item()-x1.item()))): #range(5):
+    #     start_x+=x
+    #     start_y=int(y1)
+    #     for j in range(int(abs(y2.item()-y1.item()))): #range(5):
+    #         start_y+=y
+    #         pixel_data = depth_frame.get_pixel(start_x, start_y)
+    #         if pixel_data[0] >127 and pixel_data[1] > 127 and pixel_data[2] < 10:
+    #             distances.append(depth_frame.get_distance(int(start_x), int(start_y)))
+            
+
+    # std_dev=numpy.std(distances)
+    # mean=numpy.mean(distances)
+    # lower_bound = mean - 3 * std_dev
+    # upper_bound = mean + 3 * std_dev
+
+    # # Filter out the values that are within the bounds
+    # filtered_arr = [x for x in distances if (x >= lower_bound and x <= upper_bound)]
+    # # print(filtered_arr)
+    # average=sum(filtered_arr)/len(filtered_arr)
+    
+    dist = 0
+
     return dist
 
 @smart_inference_mode()
@@ -96,6 +142,7 @@ def run(
         dnn=False,  # use OpenCV DNN for ONNX inference
         vid_stride=1,  # video frame-rate stride
 ):
+    global signal_handler_done
     source = str(source)
     save_img = not nosave and not source.endswith('.txt')  # save inference images
     is_file = Path(source).suffix[1:] in (IMG_FORMATS + VID_FORMATS)
@@ -117,16 +164,32 @@ def run(
 
     # Dataloader
     bs = 1  # batch_size
-    view_img = check_imshow(warn=True)
+    # commented ale
+    if view_img:
+        view_img = check_imshow(warn=True)
     dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=pt, vid_stride=vid_stride)
+
+    if not signal_handler_done:
+        signal_handler_done=True
+        def signal_handler(sig, frame):
+
+            # Catch Ctrl+C and stop the pipeline
+            dataset.capture[0].stop()
+            print('Pipeline stopped')
+            exit(0)
+
+        signal.signal(signal.SIGINT, signal_handler)
     bs = len(dataset)
+
+    cam_info = {}
     
     vid_path, vid_writer = [None] * bs, [None] * bs
-
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
     for path, im, im0s, depth, vid_cap, s in dataset:
+        print(str(len(im0s)) + ' : ' + str(len(depth)))
+        input()
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
             im = im.half() if model.fp16 else im.float()  # uint8 to fp16/32
@@ -150,11 +213,9 @@ def run(
         for i, det in enumerate(pred):  # per image
             seen += 1
             s = ''
+            q = ''
             p, im0, frame = path[i], im0s[i].copy(), dataset.count
-            s += f'{i}: '
-
             p = Path(p)  # to Path
-            s += '%gx%g ' % im.shape[2:]  # print string
 
             annotator = Annotator(im0, line_width=line_thickness, example=str(names))
             if len(det):
@@ -169,31 +230,52 @@ def run(
                 # Write results
                 counter = 0
                 for *xyxy, conf, cls in reversed(det):
+                    distance = get_distance(depth[i],xyxy)
+                    c = int(cls)  # integer class
+                    x1, y1, x2, y2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
+                    cam_info = {
+                        "object": names[c],
+                        "x1": x1,
+                        "y1": y1,
+                        "x2": x2,
+                        "y2": y2,
+                        "distance": round(distance, 2)
+                    }
 
+                    json_data = json.dumps(cam_info)
+
+                    q += f'{names[c]}, {x1},{y1},{x2},{y2},{distance:.2f}#'
                     if view_img:  # Add bbox to imageq
-                        c = int(cls)  # integer class
                         if source == 'rs':
-                            distance = get_distance(depth[i],xyxy)
                             label = (f'{names[c]} {conf:.2f}: {distance:.2f} mm')
-                            if counter < 1:
-                                move(xyxy, names[c], distance)
-                                counter+=1
                         else:
                             label = (f'{names[c]} {conf:.2f}')
                         annotator.box_label(xyxy, label, color=colors(c, True), )
                         
             # Stream results
             im0 = annotator.result()
+            remote_stream = True
+            if remote_stream:
+                print('sending stream results')
+                cv2imgbytes = cv2.imencode('.jpg', im0)[1].tobytes()
+                cv2imglength = len(cv2imgbytes).to_bytes(4, byteorder='little')
+                # client_socket.sendall(cv2imglength + cv2imgbytes)
+            # view_img = False
             if view_img:
                 if platform.system() == 'Linux' and p not in windows:
                     windows.append(p)
                     cv2.namedWindow(str(p), cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)  # allow window resize (Linux)
                     cv2.resizeWindow(str(p), im0.shape[1], im0.shape[0])
+                # commented ale
                 cv2.imshow(str(p), im0)
-                cv2.waitKey(1)  # 1 millisecond
+                cv2.waitKey(100)  # 1 millisecond
+            print(cam_info)    
+            num_messages = mq.current_messages
+            if q and num_messages<10: # send message to MQ if message string is not empty
+                mq.send(json_data)
 
         # Print time (inference-only)
-        LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1E3:.1f}ms")
+        # LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1E3:.1f}ms")
 
     # Print results
     t = tuple(x.t / seen * 1E3 for x in dt)  # speeds per image
@@ -204,30 +286,10 @@ def run(
     if update:
         strip_optimizer(weights[0])  # update model (to fix SourceChangeWarning)
 
-def move(box, name, distance):
-    x1, y1, x2, y2 = box
-    x = int((x2-x1)/2 + x1)
-    serialVar = serial.Serial(port="/dev/ttyACM0", baudrate=115200)
-    serialVar.close()
-    serialVar.open()
-    if name == 'green cylinder' and distance > 250:
-        if x > 464:
-            serialVar.write(b'R') # 82
-            print ('right')
-        elif x < 384:
-            serialVar.write(b'L') #76
-            print ('L')
-        else:
-            serialVar.write(b'F') # 70
-            print ('forward')
-    else:
-        serialVar.write(b'S')
-    serialVar.close()
-
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'best.onnx', help='model path or triton URL')
-    parser.add_argument('--source', type=str, default='0', help='file/dir/URL/glob/screen/0(webcam)')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'best_small.onnx', help='model path or triton URL')
+    parser.add_argument('--source', type=str, default='rs', help='file/dir/URL/glob/screen/0(webcam)')
     parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='(optional) dataset.yaml path')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
     parser.add_argument('--conf-thres', type=float, default=0.75, help='confidence threshold')
