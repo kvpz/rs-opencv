@@ -170,7 +170,13 @@ int main(){
                 if (!task_completed) {
                     task_completed = find_objects(objects, &object_located, &task_completed);
                 } else {
-                    break;
+                    for (const auto& object_viewed : objects) {
+                        if (object_viewed.object == "duck" && object_viewed.distance < 20) {
+                           break; // next action (call arm function "arm.get(distance);")
+                        } else {
+                            task_completed = false;
+                        }
+                    }
                 }
             }
             if (ducks_not_founded_counter > 2){
