@@ -39,7 +39,7 @@ void send_command(const std::string& command){
     }
 }
 
-bool find_objects(const std::vector<Object>& objects) {
+bool find_objects(const std::vector<Object>& objects, bool* object_located, bool* task_completed) {
     std::vector<Object> ducks;
     for (const auto& object_viewed : objects) {
         if (object_viewed.object == "duck") {
@@ -48,6 +48,7 @@ bool find_objects(const std::vector<Object>& objects) {
     }
 
     if (!ducks.empty()) {
+        *object_located = true;
         const Object& duck = *std::min_element(ducks.begin(), ducks.end(),
             [](const Object& x, const Object& y) { return x.distance < y.distance; });
         const int x1 = duck.x1;
@@ -73,12 +74,11 @@ bool find_objects(const std::vector<Object>& objects) {
         } else {
             std::cout << "founded" << std::endl;
             send_command("S");
-            return true;
+            *task_completed = true;
         }
     } else {
         send_command("S");
     }
-    return  false;
 }
 
 int main(){
@@ -103,7 +103,11 @@ int main(){
         exit(1);
     }
 
-    bool founded = false;
+    bool object_located = false;
+    bool task_completed = false;
+    int16_t ducks_founded_counter = 0; //to avoid false positive i am expecting to get 3 times a duck object
+    int16_t ducks_not_founded_counter = 0;
+    int16_t counter_to_find_target = 0;
 
     send_command("c");
     std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -120,29 +124,70 @@ int main(){
         if (bytes_received > 0) {
             message[bytes_received] = '\0';
             std::string decoded_message = std::string(message);
-            // Convert the string to a list of dictionaries
-            Json::Value root;
-            Json::CharReaderBuilder builder;
-            const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-            std::string errors;
-            bool success = reader->parse(decoded_message.c_str(), decoded_message.c_str() + decoded_message.size(), &root, &errors);
-            if (!success) {
-                std::cerr << "Failed to parse JSON message: " << errors << std::endl;
-                continue;
-            }
-            std::vector<Object> objects;
-            for (Json::Value& object : root) {
-                Object obj;
-                obj.object = object["object"].asString();
-                obj.x1 = object["x1"].asInt();
-                obj.x2 = object["x2"].asInt();
-                obj.distance = object["distance"].asInt();
-                objects.push_back(obj);
-            }
-            if (!founded) {
-                founded = find_objects(objects);
+
+            //verify if we get duck input at least 3 times
+            bool duck_in_image = message.find("duck") != std::string::npos;
+            if (duck_in_image) {
+                ducks_founded_counter++;
+                if (ducks_founded_counter > 2){
+                    ducks_not_founded_counter = 0;
+                }
+                if (ducks_founded_counter > 3000){ //to avoid overflow
+                    ducks_founded_counter = 4;
+                }
             } else {
-                break;
+                ducks_not_founded_counter++;
+                if (ducks_not_founded_counter > 2){
+                    ducks_founded_counter = 0;
+                }
+                if (ducks_not_founded_counter > 3000){ //to avoid overflow
+                    ducks_not_founded_counter = 4;
+                }
+            }
+            
+            if (ducks_founded_counter > 2){
+                counter_to_find_target = 0;
+                // Convert the string to a list of dictionaries
+                Json::Value root;
+                Json::CharReaderBuilder builder;
+                const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+                std::string errors;
+                bool success = reader->parse(decoded_message.c_str(), decoded_message.c_str() + decoded_message.size(), &root, &errors);
+                if (!success) {
+                    std::cerr << "Failed to parse JSON message: " << errors << std::endl;
+                    continue;
+                }
+                std::vector<Object> objects;
+                for (Json::Value& object : root) {
+                    Object obj;
+                    obj.object = object["object"].asString();
+                    obj.x1 = object["x1"].asInt();
+                    obj.x2 = object["x2"].asInt();
+                    obj.distance = object["distance"].asInt();
+                    objects.push_back(obj);
+                }
+
+                if (!task_completed) {
+                    task_completed = find_objects(objects, &object_located, &task_completed);
+                } else {
+                    break;
+                }
+            }
+            if (ducks_not_founded_counter > 2){
+                if (counter_to_find_target % 7 == 3) {
+                    if (object_located){
+                        send_command('B');
+                    } else (object_located) {
+                        send_command('Z');
+                    }
+                } else if (counter_to_find_target % 7 == 6) {
+                    send_command('S');                
+                }
+                counter_to_find_target++;
+                // to avoid overflow
+                if (counter_to_find_target > 5600){
+                    counter_to_find_target = 1;
+                }
             }
         }
     }
