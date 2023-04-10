@@ -36,7 +36,7 @@ for keypoint in keypoints:
 
 # Draw a circle at the location of the reddest red
 if reddest_red is not None:
-    img = cv2.circle(img, reddest_red, 40, (0, 255, 255), -1)
+    img = cv2.circle(img, reddest_red, 40, (0, 255, 255), -1);
 
 # Show the image
 cv2.imshow("Image", img)

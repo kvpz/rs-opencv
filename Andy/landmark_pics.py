@@ -4,11 +4,7 @@ import pyrealsense2 as rs
 import numpy as np
 import cv2
 import os,time
-
-#mq_name = "/attraction_color_queue"
-#mq_max_size = 10000
-#mq_msg_size = 102400
-
+import serial
 
 my_path = "New_Images/"
 onlyfiles = [f for f in listdir(my_path) if isfile(join(my_path, f))]
@@ -91,12 +87,9 @@ def recognize_square(color):
     starting_x,starting_y,ending_x,ending_y=0,0,0,0
 
     total_red_det=0
-    total_green_det=0
     total_pixels=0
     all_found={}
-    print("color . shape [ 0 ] ", color.shape[0])
-    
-    for row in range(color.shape[0]): # 480
+    for row in range(color.shape[0]):
         if row<=color.shape[0]/2:
                 continue
         for col in range(color.shape[1]):
@@ -106,15 +99,12 @@ def recognize_square(color):
             b, g, r = color[row, col]
             # if lower_range[0]<=r<=upper_range[0] and lower_range[1]<=g<=upper_range[1] and lower_range[2]<=b<=upper_range[2]:
             total_pixels+=1
-            if r>=100 and g<100 and b<100:
+            if r>=100 and g<r and b<r:
                 total_red_det+=1
-            if r < 100 and g >= 100 and b < 100:
-                total_green_det += 1
 
 
 
-    print("(RED) {}/{} = {}%".format(total_red_det,total_pixels,round(total_red_det/total_pixels*100,2)))
-    print("(GREEN) {}/{} = {}%".format(total_green_det,total_pixels,round(total_green_det/total_pixels*100,2)))
+    print("{}/{} = {}%".format(total_red_det,total_pixels,round(total_red_det/total_pixels*100,2)))
 
     # for key,value in all_found.items():
     #     if key:
@@ -122,18 +112,11 @@ def recognize_square(color):
     #             return value
 
 if __name__=="__main__":
-    for i in range(30):
+    for i in range(10):
         name,color=take_picture()
-        recognize_square(color)
-        time.sleep(1)
-    # print("Picture taken")
-    # borders=recognize_square(color)
-    # print("Recognized color")
-    # if borders:
-
-    #     draw_border(name,borders[0],borders[1],borders[2],borders[3])
-    #     print("Border drawn")
-    # save_to_remote_pc()
-    # print("Saved to remote PC")
+        comm = serial.Serial("/dev/ttyACM0",115200)
+        comm.write(b'F')
+        time.sleep(0.5)
+        comm.write(b'S')
 
 
